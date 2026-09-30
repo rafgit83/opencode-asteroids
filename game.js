@@ -228,10 +228,9 @@ class Ship {
     this.vx     = 0;
     this.vy     = 0;
     this.radius = 12;
-    this.thrusting     = false;   // true mientras se mantiene ↑ (dibuja la llama)
-    this.invincible    = 3;       // seg. de invencibilidad al reaparecer (parpadea)
-    this.shootCooldown = 0;       // seg. que faltan para poder disparar de nuevo
-    this.speedTimer    = 0;       // power-up "Velocidad" activo (segundos restantes)
+    this.thrusting     = false;
+    this.invincible    = 3;
+    this.shootCooldown = 0;
     this.dead          = false;
   }
 
@@ -241,12 +240,9 @@ class Ship {
     if (this.shootCooldown > 0) this.shootCooldown -= dt;
     if (this.speedTimer    > 0) this.speedTimer    -= dt;
 
-    const ROT    = 3.5;   // rad/s — velocidad de giro con ←/→
-    // Empuje: se duplica durante el power-up "Velocidad". Como DRAG es un
-    // multiplicador fijo por frame, duplicar el empuje duplica también la
-    // velocidad máxima que llega a alcanzar la nave.
-    const THRUST = this.speedTimer > 0 ? 520 : 260;  // px/s²
-    const DRAG   = 0.987; // freno por frame; ojo: NO está escalado por dt
+    const ROT   = 3.5;   // rad/s
+    const THRUST = 260;  // px/s²
+    const DRAG   = 0.987;
 
     if (keys['ArrowLeft'])  this.angle -= ROT * dt;
     if (keys['ArrowRight']) this.angle += ROT * dt;
@@ -303,8 +299,7 @@ class Ship {
       ctx.moveTo(-8, -4);
       ctx.lineTo(-8 - rand(6, 14), 0);
       ctx.lineTo(-8,  4);
-      // Llama amarilla mientras dura el power-up "Velocidad"
-      ctx.strokeStyle = this.speedTimer > 0 ? 'rgba(255, 210, 63, 0.95)' : 'rgba(255, 130, 0, 0.85)';
+      ctx.strokeStyle = 'rgba(255, 130, 0, 0.85)';
       ctx.stroke();
     }
 
@@ -348,66 +343,12 @@ class Particle {
   }
 }
 
-// ── PowerUp ───────────────────────────────────────────────────────────────────
-// Mejora flotante que la nave recoge al tocarla. Hoy solo existe el tipo
-// 'velocidad' (empuje doble durante 5 s), pero el campo type permite añadir
-// más power-ups sin cambiar la lógica de aparición ni de colisión.
-class PowerUp {
-  constructor(x, y, type = 'velocidad') {
-    this.x      = x;
-    this.y      = y;
-    this.type   = type;
-    this.radius = 12;   // radio de recolección
-    this.ttl    = 10;   // segundos en pantalla antes de desvanecerse
-    this.age    = 0;    // tiempo vivo; anima el pulso del dibujo
-    this.dead   = false;
-  }
-
-  update(dt) {
-    this.age += dt;   // no se mueve: queda fija donde apareció
-    this.ttl -= dt;
-    if (this.ttl <= 0) this.dead = true;
-  }
-
-  draw() {
-    // Parpadeo de aviso durante los últimos 3 s antes de desaparecer
-    if (this.ttl < 3 && Math.floor(this.ttl * 6) % 2 === 0) return;
-
-    // Pulso suave: la escala oscila entre ×0.88 y ×1.12 para llamar la atención
-    const pulse = 1 + Math.sin(this.age * 5) * 0.12;
-
-    ctx.save();
-    ctx.translate(this.x, this.y);
-    ctx.scale(pulse, pulse);
-    ctx.strokeStyle = '#ffd23f';
-    ctx.lineWidth   = 1.5;
-    ctx.lineJoin    = 'round';
-    // Silueta de rayo
-    ctx.beginPath();
-    ctx.moveTo( 2, -10);
-    ctx.lineTo(-5,   1);
-    ctx.lineTo(-1,   1);
-    ctx.lineTo(-2,  10);
-    ctx.lineTo( 5,  -1);
-    ctx.lineTo( 1,  -1);
-    ctx.closePath();
-    ctx.stroke();
-    ctx.restore();
-  }
-}
-
 // ── Estado del juego ──────────────────────────────────────────────────────────
-// Globales mutables: entidades vivas y marcadores de la partida en curso.
-let ship, bullets, asteroids, particles, powerups;
+let ship, bullets, asteroids, particles;
 let score, lives, level;
-let state;      // máquina de estados: 'playing' | 'dead' | 'gameover'
-let deadTimer;  // seg. de pausa entre la muerte y la reaparición
-let spawnTimer; // cuenta regresiva para la aparición de power-ups
-let fugazTimer; // cuenta regresiva para la aparición de la estrella fugaz
-let fugazAviso; // seg. restantes del aviso "¡ESTRELLA FUGAZ!" en el HUD
+let state;      // 'playing' | 'dead' | 'gameover'
+let deadTimer;
 
-// Crea `count` asteroides grandes en posiciones aleatorias, nunca dentro de
-// SAFE_DIST del centro (donde reaparece la nave) para no matarla injustamente.
 function spawnAsteroids(count) {
   const SAFE_DIST = 130;
   for (let i = 0; i < count; i++) {
@@ -418,6 +359,16 @@ function spawnAsteroids(count) {
     } while (Math.hypot(x - W / 2, y - H / 2) < SAFE_DIST);
     asteroids.push(new Asteroid(x, y, 3));
   }
+}
+
+function spawnPowerUp() {
+  const SAFE_DIST = 150;
+  let x, y;
+  do {
+    x = rand(0, W);
+    y = rand(0, H);
+  } while (Math.hypot(x - ship.x, y - ship.y) < SAFE_DIST);
+  powerups.push(new PowerUp(x, y, 'velocidad'));
 }
 
 // Coloca un power-up en un punto aleatorio a SAFE_DIST de la nave: nunca
@@ -455,9 +406,6 @@ function initGame() {
   lives  = 3;
   level  = 1;
   state  = 'playing';
-  spawnTimer = rand(8, 12);   // seg. hasta el primer power-up (queremos verlo pronto)
-  fugazTimer = rand(6, 10);   // seg. hasta la primera estrella fugaz (también queremos verla)
-  fugazAviso = 0;
   spawnAsteroids(4);
 }
 
@@ -468,14 +416,11 @@ function nextLevel() {
   particles = [];
   powerups  = [];
   ship.reset();
-  spawnTimer = rand(15, 20);
-  fugazTimer = rand(10, 15);
   spawnAsteroids(3 + level);
 }
 
-// Lanza `count` partículas desde (x, y); color "R,G,B" (blanco por defecto).
-function explode(x, y, count = 8, color = '255,255,255') {
-  for (let i = 0; i < count; i++) particles.push(new Particle(x, y, color));
+function explode(x, y, count = 8) {
+  for (let i = 0; i < count; i++) particles.push(new Particle(x, y));
 }
 
 // La nave choca: explota, pierde una vida y pasa a 'dead' (o 'gameover' si era la última).
@@ -561,36 +506,6 @@ function update(dt) {
     }
   }
 
-  // Nave vs power-up: al recogerlo, 5 s de empuje doble (ver Ship.update)
-  for (const p of powerups) {
-    if (!p.dead && dist(ship, p) < ship.radius + p.radius) {
-      p.dead = true;
-      ship.speedTimer = 5;
-      explode(ship.x, ship.y, 10, '255, 210, 63');   // chispas amarillas de feedback
-    }
-  }
-  powerups = powerups.filter(p => !p.dead);
-
-  // Aparición periódica de power-ups: uno cada 15-20 s. Como cada uno dura
-  // 10 s en pantalla, nunca hay más de uno a la vez.
-  spawnTimer -= dt;
-  if (spawnTimer <= 0) {
-    spawnPowerUp();
-    spawnTimer = rand(15, 20);
-  }
-
-  // Aparición periódica de la estrella fugaz: una cada 10-15 s y solo si no
-  // queda ninguna viva; si ya hay una, el timer se reprograma sin soltar otra.
-  fugazTimer -= dt;
-  if (fugazTimer <= 0) {
-    if (!asteroids.some(a => a instanceof EstrellaFugaz)) {
-      spawnEstrellaFugaz();
-      fugazAviso = 2;   // muestra el aviso en el HUD durante 2 s
-    }
-    fugazTimer = rand(10, 15);
-  }
-  if (fugazAviso > 0) fugazAviso -= dt;
-
   // Nivel completado
   if (asteroids.length === 0) nextLevel();
 }
@@ -628,23 +543,8 @@ function drawHUD() {
   for (let i = 0; i < lives; i++)
     drawLifeIcon(W - 16 - i * 22, 18);
 
-  // Indicadores apilados bajo el marcador, solo en juego: power-up activo y
-  // aviso de estrella fugaz.
-  let y = 48;
-  if (state === 'playing' && ship.speedTimer > 0) {
-    ctx.textAlign = 'left';
-    ctx.fillStyle = '#ffd23f';
-    ctx.fillText(`⚡ VELOCIDAD ${ship.speedTimer.toFixed(1)}s`, 14, y);
-    y += 20;
-  }
-  if (state === 'playing' && fugazAviso > 0) {
-    ctx.textAlign = 'left';
-    ctx.fillStyle = '#22d3ee';
-    ctx.fillText('☄ ¡ESTRELLA FUGAZ!', 14, y);
-  }
 }
 
-// Texto grande centrado para las pantallas de fin de partida.
 function drawOverlay(title, sub) {
   ctx.textAlign   = 'center';
   ctx.fillStyle   = '#fff';
