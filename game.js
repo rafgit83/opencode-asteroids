@@ -1,22 +1,33 @@
 'use strict';
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// ASTEROIDS — clon clásico en HTML5 Canvas, sin dependencias ni bundler.
+// Estructura: una clase por entidad (Bullet, Asteroid, Ship, Particle, PowerUp)
+// más un estado global mutable. Física en px/s escalada por dt.
+// ═══════════════════════════════════════════════════════════════════════════════
+
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
-const W = 800;
-const H = 600;
+const W = 800;   // ancho del canvas (debe coincidir con <canvas> en index.html)
+const H = 600;   // alto del canvas  (debe coincidir con <canvas> en index.html)
 
 // ── Input ─────────────────────────────────────────────────────────────────────
+// keys: teclas mantenidas (movimiento continuo).
+// justPressed: pulsos de un solo frame (disparo, reinicio); pressed() los consume.
 const keys = {};
 const justPressed = {};
 
 window.addEventListener('keydown', e => {
+  // Solo marca pulso si la tecla no estaba ya presionada (ignora el autorepetido)
   justPressed[e.code] = !keys[e.code];
   keys[e.code] = true;
+  // Evita que la página haga scroll con las teclas del juego
   if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code))
     e.preventDefault();
 });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
 
+// Devuelve true una vez por pulsación; el pulso se consume al leerlo.
 function pressed(code) {
   const val = justPressed[code];
   justPressed[code] = false;
@@ -24,20 +35,24 @@ function pressed(code) {
 }
 
 // ── Utils ─────────────────────────────────────────────────────────────────────
+// wrap: mantiene v dentro de [0, max) — espacio toroidal: lo que sale por un
+// borde entra por el opuesto.
 const wrap  = (v, max) => ((v % max) + max) % max;
-const dist  = (a, b)   => Math.hypot(a.x - b.x, a.y - b.y);
-const rand  = (min, max) => min + Math.random() * (max - min);
-const randInt = (min, max) => Math.floor(rand(min, max + 1));
+const dist  = (a, b)   => Math.hypot(a.x - b.x, a.y - b.y);   // distancia entre dos entidades
+const rand  = (min, max) => min + Math.random() * (max - min); // flotante en [min, max)
+const randInt = (min, max) => Math.floor(rand(min, max + 1));  // entero en [min, max]
 
 // ── Bullet ────────────────────────────────────────────────────────────────────
+// Bala de la nave: viaja en línea recta y se autodestruye tras ttl segundos
+// (así no queda rebotando eternamente por el espacio toroidal).
 class Bullet {
   constructor(x, y, angle) {
     this.x = x;
     this.y = y;
-    const SPEED = 520;
+    const SPEED = 520;  // px/s, constante (no le afecta el power-up "Velocidad")
     this.vx = Math.cos(angle) * SPEED;
     this.vy = Math.sin(angle) * SPEED;
-    this.ttl  = 1.1;
+    this.ttl  = 1.1;    // vida útil en segundos (~570 px de alcance)
     this.radius = 2;
     this.dead = false;
   }
@@ -58,9 +73,11 @@ class Bullet {
 }
 
 // ── Asteroid ──────────────────────────────────────────────────────────────────
-const RADII  = [0, 16, 30, 50];   // por tamaño 1, 2, 3
+// Tablas paralelas indexadas por size (1 = pequeño, 2 = mediano, 3 = grande).
+// El índice 0 no se usa; existe solo para acceder directamente con RADII[size].
+const RADII  = [0, 16, 30, 50];   // radio de colisión por tamaño
 const SPEEDS = [0, 85, 55, 32];   // velocidad base por tamaño
-const POINTS = [0, 100, 50, 20];  // puntos por tamaño
+const POINTS = [0, 100, 50, 20];  // puntos al destruirlo, por tamaño
 
 class Asteroid {
   constructor(x, y, size = 3) {
@@ -70,11 +87,12 @@ class Asteroid {
     this.radius = RADII[size];
     this.dead = false;
 
+    // Deriva en una dirección aleatoria, con velocidad casi fija por tamaño
     const angle = rand(0, Math.PI * 2);
     const speed = SPEEDS[size] + rand(-15, 15);
     this.vx = Math.cos(angle) * speed;
     this.vy = Math.sin(angle) * speed;
-    this.rotSpeed = rand(-1.2, 1.2);
+    this.rotSpeed = rand(-1.2, 1.2);   // giro propio, rad/s
     this.rot = rand(0, Math.PI * 2);
 
     // Polígono irregular
@@ -93,6 +111,7 @@ class Asteroid {
     this.rot += this.rotSpeed * dt;
   }
 
+  // Al destruirlo genera dos fragmentos de un tamaño menor (los pequeños no se dividen)
   split() {
     if (this.size <= 1) return [];
     return [
@@ -119,9 +138,13 @@ class Asteroid {
 }
 
 // ── Ship ──────────────────────────────────────────────────────────────────────
+// Nave del jugador. Todos sus temporizadores (invincible, shootCooldown,
+// speedTimer) cuentan hacia atrás en segundos y se apagan solos al llegar a 0.
 class Ship {
   constructor() { this.reset(); }
 
+  // Vuelve a la posición inicial; se usa al iniciar partida, al subir de nivel
+  // y al reaparecer tras morir. También cancela el power-up "Velocidad".
   reset() {
     this.x      = W / 2;
     this.y      = H / 2;
@@ -147,22 +170,26 @@ class Ship {
     if (keys['ArrowLeft'])  this.angle -= ROT * dt;
     if (keys['ArrowRight']) this.angle += ROT * dt;
 
+    // Propulsión: acelera en la dirección a la que apunta la nariz
     this.thrusting = !!keys['ArrowUp'];
     if (this.thrusting) {
       this.vx += Math.cos(this.angle) * THRUST * dt;
       this.vy += Math.sin(this.angle) * THRUST * dt;
     }
 
+    // Frenado suave + avance (envuelto en los bordes de la pantalla)
     this.vx *= DRAG;
     this.vy *= DRAG;
     this.x = wrap(this.x + this.vx * dt, W);
     this.y = wrap(this.y + this.vy * dt, H);
   }
 
+  // Devuelve las balas a crear ([] si está en cooldown o muerta).
+  // El disparo sale desde la nariz de la nave, no desde su centro.
   tryShoot() {
     if (this.shootCooldown > 0 || this.dead) return [];
-    this.shootCooldown = 0.2;
-    const NOSE = 21;
+    this.shootCooldown = 0.2;   // cadencia: una bala cada 0.2 s
+    const NOSE = 21;            // distancia del centro a la punta
     const ox = this.x + Math.cos(this.angle) * NOSE;
     const oy = this.y + Math.sin(this.angle) * NOSE;
     return [new Bullet(ox, oy, this.angle)];
@@ -253,6 +280,7 @@ function spawnAsteroids(count) {
   }
 }
 
+// Reinicia todo y arranca una partida nueva (también al pulsar Espacio en game over).
 function initGame() {
   ship          = new Ship();
   bullets   = [];
@@ -265,6 +293,7 @@ function initGame() {
   spawnAsteroids(4);
 }
 
+// Sube de nivel: limpia la pantalla, recoloca la nave y añade un asteroide más.
 function nextLevel() {
   level++;
   bullets   = [];
@@ -277,6 +306,7 @@ function explode(x, y, count = 8) {
   for (let i = 0; i < count; i++) particles.push(new Particle(x, y));
 }
 
+// La nave choca: explota, pierde una vida y pasa a 'dead' (o 'gameover' si era la última).
 function killShip() {
   explode(ship.x, ship.y, 14);
   ship.dead = true;
