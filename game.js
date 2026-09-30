@@ -132,6 +132,7 @@ class Ship {
     this.thrusting     = false;
     this.invincible    = 3;
     this.shootCooldown = 0;
+    this.speedTimer    = 0;   // power-up "Velocidad" activo (segundos restantes)
     this.dead          = false;
   }
 
@@ -139,9 +140,10 @@ class Ship {
     if (this.dead) return;
     if (this.invincible    > 0) this.invincible    -= dt;
     if (this.shootCooldown > 0) this.shootCooldown -= dt;
+    if (this.speedTimer    > 0) this.speedTimer    -= dt;
 
-    const ROT   = 3.5;   // rad/s
-    const THRUST = 260;  // px/s²
+    const ROT    = 3.5;   // rad/s
+    const THRUST = this.speedTimer > 0 ? 520 : 260;  // px/s² (doble con "Velocidad")
     const DRAG   = 0.987;
 
     if (keys['ArrowLeft'])  this.angle -= ROT * dt;
@@ -195,7 +197,8 @@ class Ship {
       ctx.moveTo(-8, -4);
       ctx.lineTo(-8 - rand(6, 14), 0);
       ctx.lineTo(-8,  4);
-      ctx.strokeStyle = 'rgba(255, 130, 0, 0.85)';
+      // Llama amarilla durante el power-up "Velocidad"
+      ctx.strokeStyle = this.speedTimer > 0 ? 'rgba(255, 210, 63, 0.95)' : 'rgba(255, 130, 0, 0.85)';
       ctx.stroke();
     }
 
@@ -205,9 +208,10 @@ class Ship {
 
 // ── Partículas (explosión) ────────────────────────────────────────────────────
 class Particle {
-  constructor(x, y) {
+  constructor(x, y, color = '255,255,255') {
     this.x  = x;
     this.y  = y;
+    this.color = color;
     const angle = rand(0, Math.PI * 2);
     const speed = rand(30, 130);
     this.vx   = Math.cos(angle) * speed;
@@ -226,7 +230,7 @@ class Particle {
 
   draw() {
     const alpha = this.ttl / this.life;
-    ctx.strokeStyle = `rgba(255,255,255,${alpha.toFixed(2)})`;
+    ctx.strokeStyle = `rgba(${this.color},${alpha.toFixed(2)})`;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(this.x, this.y);
@@ -235,11 +239,56 @@ class Particle {
   }
 }
 
+// ── PowerUp ───────────────────────────────────────────────────────────────────
+class PowerUp {
+  constructor(x, y, type = 'velocidad') {
+    this.x      = x;
+    this.y      = y;
+    this.type   = type;
+    this.radius = 12;
+    this.ttl    = 10;   // segundos en pantalla antes de desvanecerse
+    this.age    = 0;    // para la animación de pulso
+    this.dead   = false;
+  }
+
+  update(dt) {
+    this.age += dt;
+    this.ttl -= dt;
+    if (this.ttl <= 0) this.dead = true;
+  }
+
+  draw() {
+    // Parpadeo cuando está por desvanecerse
+    if (this.ttl < 3 && Math.floor(this.ttl * 6) % 2 === 0) return;
+
+    const pulse = 1 + Math.sin(this.age * 5) * 0.12;
+
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.scale(pulse, pulse);
+    ctx.strokeStyle = '#ffd23f';
+    ctx.lineWidth   = 1.5;
+    ctx.lineJoin    = 'round';
+    // Silueta de rayo
+    ctx.beginPath();
+    ctx.moveTo( 2, -10);
+    ctx.lineTo(-5,   1);
+    ctx.lineTo(-1,   1);
+    ctx.lineTo(-2,  10);
+    ctx.lineTo( 5,  -1);
+    ctx.lineTo( 1,  -1);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
 // ── Estado del juego ──────────────────────────────────────────────────────────
-let ship, bullets, asteroids, particles;
+let ship, bullets, asteroids, particles, powerups;
 let score, lives, level;
 let state;      // 'playing' | 'dead' | 'gameover'
 let deadTimer;
+let spawnTimer; // cuenta regresiva para la aparición de power-ups
 
 function spawnAsteroids(count) {
   const SAFE_DIST = 130;
@@ -253,15 +302,27 @@ function spawnAsteroids(count) {
   }
 }
 
+function spawnPowerUp() {
+  const SAFE_DIST = 150;
+  let x, y;
+  do {
+    x = rand(0, W);
+    y = rand(0, H);
+  } while (Math.hypot(x - ship.x, y - ship.y) < SAFE_DIST);
+  powerups.push(new PowerUp(x, y, 'velocidad'));
+}
+
 function initGame() {
   ship          = new Ship();
   bullets   = [];
   asteroids = [];
   particles = [];
+  powerups  = [];
   score  = 0;
   lives  = 3;
   level  = 1;
   state  = 'playing';
+  spawnTimer = rand(8, 12);   // el primer power-up aparece pronto
   spawnAsteroids(4);
 }
 
@@ -269,12 +330,14 @@ function nextLevel() {
   level++;
   bullets   = [];
   particles = [];
+  powerups  = [];
   ship.reset();
+  spawnTimer = rand(15, 20);
   spawnAsteroids(3 + level);
 }
 
-function explode(x, y, count = 8) {
-  for (let i = 0; i < count; i++) particles.push(new Particle(x, y));
+function explode(x, y, count = 8, color = '255,255,255') {
+  for (let i = 0; i < count; i++) particles.push(new Particle(x, y, color));
 }
 
 function killShip() {
@@ -303,6 +366,8 @@ function update(dt) {
     particles.forEach(p => p.update(dt));
     particles = particles.filter(p => !p.dead);
     asteroids.forEach(a => a.update(dt));
+    powerups.forEach(p => p.update(dt));
+    powerups  = powerups.filter(p => !p.dead);
     if (deadTimer <= 0) { state = 'playing'; ship.reset(); }
     return;
   }
@@ -316,9 +381,11 @@ function update(dt) {
   bullets.forEach(b => b.update(dt));
   asteroids.forEach(a => a.update(dt));
   particles.forEach(p => p.update(dt));
+  powerups.forEach(p => p.update(dt));
 
   bullets   = bullets.filter(b => !b.dead);
   particles = particles.filter(p => !p.dead);
+  powerups  = powerups.filter(p => !p.dead);
 
   // Bala vs asteroide
   const newAsteroids = [];
@@ -344,6 +411,23 @@ function update(dt) {
         break;
       }
     }
+  }
+
+  // Nave vs power-up
+  for (const p of powerups) {
+    if (!p.dead && dist(ship, p) < ship.radius + p.radius) {
+      p.dead = true;
+      ship.speedTimer = 5;   // 5 s de velocidad doble
+      explode(ship.x, ship.y, 10, '255, 210, 63');
+    }
+  }
+  powerups = powerups.filter(p => !p.dead);
+
+  // Aparición periódica de power-ups
+  spawnTimer -= dt;
+  if (spawnTimer <= 0) {
+    spawnPowerUp();
+    spawnTimer = rand(15, 20);
   }
 
   // Nivel completado
@@ -381,6 +465,12 @@ function drawHUD() {
   for (let i = 0; i < lives; i++)
     drawLifeIcon(W - 16 - i * 22, 18);
 
+  // Indicador del power-up "Velocidad"
+  if (state === 'playing' && ship.speedTimer > 0) {
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#ffd23f';
+    ctx.fillText(`⚡ VELOCIDAD ${ship.speedTimer.toFixed(1)}s`, 14, 48);
+  }
 }
 
 function drawOverlay(title, sub) {
